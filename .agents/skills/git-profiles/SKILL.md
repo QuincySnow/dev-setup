@@ -46,7 +46,7 @@ Place repositories in their respective directories:
 
 ## Auto Switch Before Push
 
-Before running `git push`, always automatically set the correct identity based on the repository directory:
+Before running `git push`, always automatically set the correct identity and SSH key based on the repository directory:
 
 ```bash
 # Detect current repo path and set appropriate identity
@@ -55,11 +55,21 @@ REPO_DIR="$(git rev-parse --show-toplevel 2>/dev/null || echo "$PWD")"
 if [[ "$REPO_DIR" == ~/Work/* ]]; then
     git config user.name "SKIPPINGpetticoatconvent"
     git config user.email "146918156+SKIPPINGpetticoatconvent@users.noreply.github.com"
+    git config core.sshCommand "ssh -i ~/.ssh/id_ed25519_work"
+    git remote set-url origin git@github-work:$(basename "$REPO_DIR").git 2>/dev/null || true
 elif [[ "$REPO_DIR" == ~/Dark/* ]]; then
     git config user.name "youugiuhiuh"
     git config user.email "260548057+youugiuhiuh@users.noreply.github.com"
+    git config core.sshCommand "ssh -i ~/.ssh/id_ed25519_dark"
+    git remote set-url origin git@github-dark:$(basename "$REPO_DIR").git 2>/dev/null || true
 fi
 ```
+
+## SSH Configuration
+
+SSH 密钥根据目录自动切换:
+- `~/Work/` → `id_ed25519_work` (github-work host)
+- `~/Dark/` → `id_ed25519_dark` (github-dark host)
 
 ## Show Current Profile
 
