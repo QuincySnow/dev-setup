@@ -649,7 +649,9 @@ main() {
     elif [[ "$PACKAGE_MANAGER" == "dnf" ]] || [[ "$PACKAGE_MANAGER" == "yum" ]]; then
       dnf install -y golang
     else
-      curl -sSL https://go.dev/dl/go1.21.0.linux-amd64.tar.gz | tar -C /usr/local -xzf -
+      # Fallback: 官方二进制 https://go.dev/dl/ ；版本固定便于复现，更新时见 docs/INSTALL_SOURCES.md
+      local go_version="${GO_VERSION:-1.22.4}"
+      curl -sSL "https://go.dev/dl/go${go_version}.linux-amd64.tar.gz" | tar -C /usr/local -xzf -
     fi
   fi
 

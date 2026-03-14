@@ -35,6 +35,12 @@ E2E_LXD_FULL=1 ./tests/run_tests.sh
 # 只跑 Bats + LXD（不跑 Docker）
 E2E_LXD=1 ./tests/run_tests.sh
 
+# 仅 amd64 架构跑 LXD E2E（非 x86_64 主机会跳过 LXD）
+E2E_LXD=1 E2E_LXD_ARCH=amd64 ./tests/run_tests.sh
+
+# 只测 Debian 与 Ubuntu 镜像（默认 ubuntu:22.04 debian:12）
+E2E_LXD=1 E2E_LXD_DEB_UB=1 ./tests/run_tests.sh
+
 # ---------- Docker E2E（可选）----------
 # 含「最小」容器测试（单容器，仅 fish）
 E2E_DOCKER=1 ./tests/run_tests.sh
@@ -62,13 +68,39 @@ E2E_DOCKER_FULL=1 ./tests/run_tests.sh
   - 若需 Fedora 系，可加 `fedora:39`（需宿主机已拉取对应镜像：`lxc image list images:`）。
 - 未安装或不可用 LXD 时，LXD E2E 会被跳过并提示。
 
+### LXD 权限与自动 `sg lxd`
+
+当设置 `E2E_LXD=1` 或 `E2E_LXD_FULL=1` 时，`run_tests.sh` 会**自动在 lxd 组下执行** e2e（通过 `sg lxd`），效果等同先执行 `newgrp lxd` 再跑测试，因此**无需手动先运行 `newgrp lxd`**。前提是当前用户已加入 `lxd` 组（`sudo usermod -aG lxd $USER` 后至少重新登录一次）。
+
 ### 若出现 "LXD not found or not usable (lxc + driver lxd), skip"
 
-脚本通过 `lxc` 客户端且 `lxc info` 输出含 `driver: lxd` 判断 LXD 可用。请检查：
+脚本通过 `lxc` 客户端且 `lxc info` 输出含 `driver: lxd` 判断 LXD 可用。若仍被跳过，请检查：
 
 1. **`lxc` 是否在 PATH**：Snap 安装时客户端通常在 `/snap/bin`，执行 `export PATH="/snap/bin:$PATH"` 或在 `~/.zshrc` / `~/.bashrc` 中加入后重载。
-2. **当前用户是否在 `lxd` 组**：`sudo usermod -aG lxd $USER` 后需**重新登录**或执行 `newgrp lxd`，再在同一 shell 中运行测试。
-3. **在能执行 `lxc list` 的终端里跑测试**：IDE 内置终端若未继承 PATH 或 lxd 组，请在已配置好的终端中执行。
+2. **当前用户是否在 `lxd` 组**：`sudo usermod -aG lxd $USER` 后需**重新登录**一次（或新开终端），之后 `run_tests.sh` 会用 `sg lxd` 自动带 lxd 组运行。
+3. **在能执行 `lxc list` 的终端里跑测试**：IDE 内置终端若未继承 PATH，请确保 PATH 含 `/snap/bin`。
+
+### 若出现 "Failed to launch container: ubuntu:22.04"
+
+脚本会打印 LXD 的原始错误。常见原因与处理：
+
+- **No root device / 默认 profile 无根磁盘**：运行 `lxc profile show default`，若看到 `devices: {}` 说明没有 root 磁盘，需先配好再 launch：
+  1. 查看存储池：`lxc storage list`
+  2. 若没有任何池，创建默认 dir 池：`lxc storage create default dir`
+  3. 为 default profile 添加 root 设备：`lxc profile device add default root disk path=/ pool=default`
+  4. 验证：`lxc launch ubuntu:22.04 test`（若提示 "already exists" 表示同名容器已存在，可 `lxc delete test` 后重试或换名）
+- **镜像拉取失败 / 网络**：确认能访问镜像站：`lxc image list ubuntu:`，必要时配置代理或换网络。
+- **remote 未配置**：运行 `lxc remote list`，确认有 `ubuntu`。若无则按 LXD 文档添加官方 ubuntu 镜像 remote。
+
+## 工具安装来源参考
+
+Fish、Zsh、Go、uv、Bun、FNM 等安装命令与官方/网络文档的对照见 **`docs/INSTALL_SOURCES.md`**，便于定期核对防止过时。
+
+## Debian/Ubuntu 安装流程说明（与实现同步）
+
+- **Ubuntu**：在容器内启用 universe 时按 **VERSION_CODENAME**（如 jammy / noble）写入，不硬编码版本；24.04 (noble) 默认使用 `ubuntu.sources` (deb822) 且已含 universe，脚本会检测后跳过重复添加。最小镜像通常无 `add-apt-repository`，故用手动写入 `sources.list` 的方式。
+- **Debian**：无 universe 概念，直接 `apt-get update && apt-get install`；仓库密钥使用当前推荐方式（signed-by 等由系统镜像提供）。
+- 所有 apt 操作均使用 **DEBIAN_FRONTEND=noninteractive** 以支持非交互式运行。
 
 ## 目录结构
 
@@ -90,6 +122,8 @@ tests/
 - **E2E_LXD=1**：在 LXD 系统容器内跑最小 E2E（默认镜像 `ubuntu:22.04`）。
 - **E2E_LXD_FULL=1**：再跑「多工具」E2E（fish/zsh/uv/bun/fnm/node，仅 Debian/Ubuntu 系镜像）。
 - **E2E_LXD_IMAGES**：空格分隔的镜像列表，用于多发行版兼容性。例如：`E2E_LXD_IMAGES="ubuntu:22.04 debian:12"`。未设时默认 `ubuntu:22.04`。
+- **E2E_LXD_ARCH=amd64**：仅在本机为 x86_64（amd64）时运行 LXD E2E；非 amd64 主机则跳过 LXD 测试。
+- **E2E_LXD_DEB_UB=1**：只测 Debian 与 Ubuntu 镜像。未设 `E2E_LXD_IMAGES` 时用 `ubuntu:22.04 debian:12`；已设则从列表中只保留 `ubuntu:*` 与 `debian:*`。
 
 **Docker E2E**
 

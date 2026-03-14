@@ -26,7 +26,21 @@ run() {
 echo "=============================================="
 echo "  Layer 1: Quick tests (e2e.sh, no Docker)"
 echo "=============================================="
-run "${SCRIPT_DIR}/e2e.sh" || true
+# 启用 LXD E2E 时在 lxd 组下运行，避免 socket permission denied（效果等同先 newgrp lxd 再测）
+# 用 getent group lxd 判断用户是否在 lxd 组（不依赖当前进程是否已 newgrp），并保证 /snap/bin 在 PATH 以便找到 lxc
+run_e2e() {
+  if [[ "${E2E_LXD:-0}" == "1" ]] || [[ "${E2E_LXD_FULL:-0}" == "1" ]]; then
+    if getent group lxd 2>/dev/null | grep -qE "\b${USER}\b"; then
+      # sg 子 shell 可能 PATH 很精简，显式加入常见 lxc 路径（snap / apt）
+      sg lxd -c 'export PATH="/snap/bin:/usr/local/bin:/usr/bin:/bin:$PATH"; export E2E_LXD="'"${E2E_LXD:-0}"'"; export E2E_LXD_FULL="'"${E2E_LXD_FULL:-0}"'"; export E2E_LXD_IMAGES="'"${E2E_LXD_IMAGES:-}"'"; export E2E_LXD_ARCH="'"${E2E_LXD_ARCH:-}"'"; export E2E_LXD_DEB_UB="'"${E2E_LXD_DEB_UB:-0}"'"; export E2E_DOCKER="'"${E2E_DOCKER:-0}"'"; export E2E_DOCKER_FULL="'"${E2E_DOCKER_FULL:-0}"'"; "'"${SCRIPT_DIR}"'/e2e.sh"'
+    else
+      "${SCRIPT_DIR}/e2e.sh"
+    fi
+  else
+    "${SCRIPT_DIR}/e2e.sh"
+  fi
+}
+run run_e2e || true
 
 echo ""
 echo "=============================================="

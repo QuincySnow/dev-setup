@@ -228,7 +228,7 @@ test_docker_e2e_minimal() {
     -v "${REPO_ROOT}:${REPO_ROOT}:ro" \
     -w "$REPO_ROOT" \
     -e DEBIAN_FRONTEND=noninteractive \
-    ubuntu:22.04 bash -c "grep -q universe /etc/apt/sources.list 2>/dev/null || echo 'deb http://archive.ubuntu.com/ubuntu/ jammy universe' >> /etc/apt/sources.list; DEBIAN_FRONTEND=noninteractive apt-get update -qq && apt-get install -y -qq ca-certificates curl git fish >/dev/null && update-ca-certificates 2>/dev/null; sleep 3600" >/dev/null 2>&1; then
+    ubuntu:22.04 bash -c '. /etc/os-release 2>/dev/null; c=${VERSION_CODENAME:-jammy}; grep -q universe /etc/apt/sources.list 2>/dev/null || echo "deb http://archive.ubuntu.com/ubuntu/ $c universe" >> /etc/apt/sources.list; DEBIAN_FRONTEND=noninteractive apt-get update -qq && apt-get install -y -qq ca-certificates curl git fish >/dev/null && update-ca-certificates 2>/dev/null; sleep 3600' >/dev/null 2>&1; then
     echo "  [Docker E2E] Failed to start container"
     return 1
   fi
@@ -351,7 +351,7 @@ test_docker_e2e_with_tools() {
     -v "${REPO_ROOT}:${REPO_ROOT}:ro" \
     -w "$REPO_ROOT" \
     -e DEBIAN_FRONTEND=noninteractive \
-    ubuntu:22.04 bash -c "grep -q universe /etc/apt/sources.list 2>/dev/null || echo 'deb http://archive.ubuntu.com/ubuntu/ jammy universe' >> /etc/apt/sources.list; DEBIAN_FRONTEND=noninteractive apt-get update -qq && apt-get install -y -qq ca-certificates >/dev/null && update-ca-certificates 2>/dev/null && apt-get install -y -qq curl git fish unzip zsh >/dev/null; sleep 3600" >/dev/null 2>&1; then
+    ubuntu:22.04 bash -c '. /etc/os-release 2>/dev/null; c=${VERSION_CODENAME:-jammy}; grep -q universe /etc/apt/sources.list 2>/dev/null || echo "deb http://archive.ubuntu.com/ubuntu/ $c universe" >> /etc/apt/sources.list; DEBIAN_FRONTEND=noninteractive apt-get update -qq && apt-get install -y -qq ca-certificates >/dev/null && update-ca-certificates 2>/dev/null && apt-get install -y -qq curl git fish unzip zsh >/dev/null; sleep 3600' >/dev/null 2>&1; then
     echo "  [Docker E2E tools] Failed to start container"
     return 1
   fi
@@ -451,17 +451,55 @@ lxd_e2e_verify_tools() {
 # 检查 LXD 可用（lxc 客户端且为 LXD 后端）
 lxd_available() {
   command -v lxc >/dev/null 2>&1 || return 1
-  lxc info 2>/dev/null | grep -q "driver: lxd" || return 1
+  # 部分环境 lxc info 输出格式不同，若含 driver: lxd 或 lxc list 可用即视为可用
+  (lxc info 2>/dev/null | grep -q "driver: lxd") || lxc list >/dev/null 2>&1 || return 1
   return 0
 }
 
+# 当 E2E_LXD_ARCH=amd64 时仅在本机为 x86_64 时跑 LXD E2E；非 amd64 则跳过
+lxd_arch_ok() {
+  [[ -z "${E2E_LXD_ARCH:-}" ]] && return 0
+  [[ "${E2E_LXD_ARCH}" == "amd64" && "$(uname -m)" == "x86_64" ]] && return 0
+  [[ "${E2E_LXD_ARCH}" == "amd64" ]] && return 1
+  return 0
+}
+
+# 仅测试 Debian 与 Ubuntu 镜像：E2E_LXD_DEB_UB=1 时默认 ubuntu:22.04 debian:12，或从 E2E_LXD_IMAGES 中只保留 ubuntu:/debian:
+lxd_e2e_image_list() {
+  local raw="${E2E_LXD_IMAGES:-ubuntu:22.04}"
+  if [[ "${E2E_LXD_DEB_UB:-0}" != "1" ]]; then
+    echo "$raw"
+    return
+  fi
+  [[ -z "${E2E_LXD_IMAGES:-}" ]] && { echo "ubuntu:22.04 debian:12"; return; }
+  local out=""
+  for img in $raw; do
+    [[ "$img" == ubuntu:* || "$img" == debian:* ]] && out="$out $img"
+  done
+  echo "${out# }"
+}
+
+# 在容器内启用 Ubuntu universe（22.04 jammy / 24.04 noble 等）：按 VERSION_CODENAME 写入，避免硬编码 jammy
+# Ubuntu 24.04 默认用 ubuntu.sources (deb822)，已含 universe；若 sources.list 仍存在则追加一行兼容
+lxd_e2e_ubuntu_enable_universe() {
+  local cname="$1"
+  lxc exec "$cname" -- bash -c '
+    . /etc/os-release 2>/dev/null || true
+    [ "${ID:-}" != ubuntu ] && exit 0
+    grep -q universe /etc/apt/sources.list 2>/dev/null && exit 0
+    grep -q universe /etc/apt/sources.list.d/ubuntu.sources 2>/dev/null && exit 0
+    codename="${VERSION_CODENAME:-jammy}"
+    echo "deb http://archive.ubuntu.com/ubuntu/ ${codename} universe" >> /etc/apt/sources.list
+  ' 2>/dev/null || true
+}
+
 # 在容器内执行安装前准备：Debian/Ubuntu 用 apt，Fedora 等用 dnf（按需扩展）
+# 参考：Ubuntu 22/24 启用 universe（add-apt-repository 最小镜像常未装，改用手动 sources）；Debian 无 universe
 lxd_e2e_bootstrap() {
   local cname="$1"
   local repo_path="$2"
-  # 检测发行版并安装基础依赖
   if lxc exec "$cname" -- bash -c "command -v apt-get >/dev/null 2>&1"; then
-    lxc exec "$cname" -- bash -c "grep -q ubuntu /etc/apt/sources.list 2>/dev/null && (grep -q universe /etc/apt/sources.list 2>/dev/null || echo 'deb http://archive.ubuntu.com/ubuntu/ jammy universe' >> /etc/apt/sources.list)" 2>/dev/null || true
+    lxd_e2e_ubuntu_enable_universe "$cname"
     lxc exec "$cname" -- env DEBIAN_FRONTEND=noninteractive bash -c "apt-get update -qq && apt-get install -y -qq ca-certificates curl git fish >/dev/null && (update-ca-certificates 2>/dev/null || true)" 2>/dev/null || \
     lxc exec "$cname" -- env DEBIAN_FRONTEND=noninteractive bash -c "apt-get update -qq && apt-get install -y -qq ca-certificates curl git fish >/dev/null" 2>/dev/null
   elif lxc exec "$cname" -- bash -c "command -v dnf >/dev/null 2>&1"; then
@@ -470,7 +508,6 @@ lxd_e2e_bootstrap() {
     echo "  [LXD E2E] Unsupported distro in image (no apt-get/dnf), skip bootstrap"
     return 1
   fi
-  # 等待 apt/dnf 锁释放
   lxc exec "$cname" -- bash -c 'n=0; while [ "$n" -lt 30 ]; do [ -f /var/lib/apt/lists/lock ] || [ -f /var/lib/dpkg/lock-frontend ] 2>/dev/null || [ -f /var/lib/dnf/lock ] 2>/dev/null || break; n=$((n+1)); sleep 1; done' 2>/dev/null || true
   return 0
 }
@@ -484,8 +521,12 @@ lxd_e2e_minimal_one() {
   local repo_mount="/mnt/dev-setup-repo"
   mkdir -p "$log_dir"
 
-  if ! lxc launch -e "$image" "$cname" >/dev/null 2>&1; then
+  local launch_err
+  launch_err=$(lxc launch -e "$image" "$cname" 2>&1) || true
+  if ! lxc list -n 2>/dev/null | grep -q "^| *${cname} "; then
     echo "  [LXD E2E] Failed to launch container: $image"
+    echo "  [LXD E2E] 错误输出: $launch_err"
+    echo "  [LXD E2E] 排查: lxc remote list、lxc profile show default（需有 root 磁盘）、网络可访问镜像站"
     return 1
   fi
   trap "lxc stop $cname 2>/dev/null || true; trap - EXIT" EXIT
@@ -544,9 +585,9 @@ lxd_e2e_with_tools_one() {
     lxc exec "$cname" -- bash -c "command -v curl >/dev/null 2>&1 || true" 2>/dev/null && break
     sleep 1
   done
-  # 安装 unzip/zsh 等（Ubuntu/Debian）
+  # 安装 unzip/zsh 等（Ubuntu/Debian）：Ubuntu 需 universe（22.04 jammy / 24.04 noble 等由 VERSION_CODENAME 判定）
   if lxc exec "$cname" -- bash -c "command -v apt-get >/dev/null 2>&1"; then
-    lxc exec "$cname" -- bash -c "grep -q universe /etc/apt/sources.list 2>/dev/null || echo 'deb http://archive.ubuntu.com/ubuntu/ jammy universe' >> /etc/apt/sources.list" 2>/dev/null || true
+    lxd_e2e_ubuntu_enable_universe "$cname"
     lxc exec "$cname" -- env DEBIAN_FRONTEND=noninteractive bash -c "apt-get update -qq && apt-get install -y -qq ca-certificates curl git fish unzip zsh >/dev/null" 2>/dev/null || true
   else
     lxc stop "$cname" 2>/dev/null; trap - EXIT; echo "  [LXD E2E tools] Only Debian/Ubuntu images supported for full tools test"; return 1
@@ -581,7 +622,10 @@ lxd_e2e_with_tools_one() {
 
 test_lxd_e2e_minimal() {
   lxd_available || { echo "LXD not found or not usable (lxc + driver lxd), skip"; return 0; }
-  local images="${E2E_LXD_IMAGES:-ubuntu:22.04}"
+  lxd_arch_ok || { echo "LXD E2E skip: E2E_LXD_ARCH=${E2E_LXD_ARCH:-} requires amd64, host is $(uname -m)"; return 0; }
+  local images
+  images=$(lxd_e2e_image_list)
+  [[ -z "$images" ]] && { echo "LXD E2E skip: E2E_LXD_DEB_UB=1 but no ubuntu/debian images"; return 0; }
   local failed=""
   for img in $images; do
     if ! lxd_e2e_minimal_one "$img"; then
@@ -597,7 +641,10 @@ test_lxd_e2e_minimal() {
 
 test_lxd_e2e_with_tools() {
   lxd_available || { echo "LXD not found or not usable, skip"; return 0; }
-  local images="${E2E_LXD_IMAGES:-ubuntu:22.04}"
+  lxd_arch_ok || { echo "LXD E2E tools skip: E2E_LXD_ARCH=${E2E_LXD_ARCH:-} requires amd64, host is $(uname -m)"; return 0; }
+  local images
+  images=$(lxd_e2e_image_list)
+  [[ -z "$images" ]] && { echo "LXD E2E tools skip: E2E_LXD_DEB_UB=1 but no ubuntu/debian images"; return 0; }
   local failed=""
   for img in $images; do
     if ! lxd_e2e_with_tools_one "$img"; then
