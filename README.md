@@ -211,15 +211,14 @@ starship preset gruvbox-rainbow > ~/.config/starship.toml
 
 ## 相关博客
 
-更多配置细节和教程，请访问我的博客：
+本脚本的安装步骤与本站以下博客文章一致，更多细节与故障排查请直接参考对应文章：
 
 🔗 **[Skipping Petticoat Convent](https://skippingpetticoatconvent.github.io/)**
 
-相关教程：
-- [Zsh 终极配置指南](https://skippingpetticoatconvent.github.io/shell/zsh/)
-- [Fish Shell 终极配置指南](https://skippingpetticoatconvent.github.io/shell/fish/)
-- [迁移到 uv](https://skippingpetticoatconvent.github.io/python/uv/)
-- [Docker 安装指南](https://skippingpetticoatconvent.github.io/docker/install/)
+- [Zsh 终极配置指南](https://skippingpetticoatconvent.github.io/blog/2025-03-01-zsh/)
+- [Fish Shell 终极配置指南](https://skippingpetticoatconvent.github.io/blog/2026-02-12-fish-shell-guide/)
+- [迁移到 uv](https://skippingpetticoatconvent.github.io/blog/2026-02-12-migrate-to-uv/)
+- [Debian/Ubuntu 安装 Docker](https://skippingpetticoatconvent.github.io/blog/2026-02-15-De_and_Ub_install_Docker/)
 
 ---
 

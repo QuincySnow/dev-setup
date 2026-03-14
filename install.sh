@@ -585,21 +585,22 @@ main() {
   # Post-install checks
   post_install_checks
 
-  # Final message
+  # Final message (re-init messages so MSG is set e.g. after sourcing os-release)
+  init_messages
   cat <<EOF
 
 ╔═══════════════════════════════════════════════════════════════╗
 ║                                                               ║
-║   ${MSG[completed]}                                  ║
+║   ${MSG[completed]}                                           ║
 ║                                                               ║
 ║   ${MSG[next_steps]}                                          ║
-║   ${MSG[restart_terminal]}                            ║
-║   ${MSG[run_shell]}                                    ║
+║   ${MSG[restart_terminal]}                                    ║
+║   ${MSG[run_shell]}                                           ║
 ║                                                               ║
-║   ${MSG[configure_git]}                              ║
+║   ${MSG[configure_git]}                                       ║
 ║                                                               ║
-║   ${MSG[blog]}   ║
-║   ${MSG[repo]}  ║
+║   ${MSG[blog]}                                                ║
+║   ${MSG[repo]}                                                ║
 ║                                                               ║
 ║   🎉 Installation completed!                                  ║
 ║                                                               ║

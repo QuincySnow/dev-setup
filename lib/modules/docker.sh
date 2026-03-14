@@ -36,16 +36,16 @@ cleanup_old_docker() {
 
   case "$PACKAGE_MANAGER" in
   apt)
-    # Remove old packages
-    $SUDO apt-get remove -y docker docker-compose docker-compose-v2 \
-      podman-docker containerd runc 2>/dev/null || true
-
-    # Remove old sources
+    # 与本站博客《Debian 和 Ubuntu 上安装 Docker Engine》一致：彻底清理旧配置
+    for pkg in docker.io docker-doc docker-compose docker-compose-v2 podman-docker containerd runc; do
+      $SUDO apt-get remove --purge -y $pkg 2>/dev/null || true
+    done
     $SUDO rm -f /etc/apt/sources.list.d/docker.list
     $SUDO rm -f /etc/apt/sources.list.d/docker.sources
+    $SUDO rm -f /etc/apt/sources.list.d/*docker*
     $SUDO rm -f /etc/apt/keyrings/docker*
     $SUDO rm -f /usr/share/keyrings/docker*
-
+    $SUDO rm -f /usr/share/keyrings/*docker*
     $SUDO apt-get clean
     apt_update
     ;;
@@ -80,16 +80,30 @@ install_docker_apt() {
 
   $SUDO chmod a+r /etc/apt/keyrings/docker.asc
 
-  # Add Docker repository
+  # 与本站博客一致：使用 deb822 格式仓库（/etc/apt/sources.list.d/docker.sources）
+  _tee_sudo() { if [[ -n "${SUDO:-}" ]]; then $SUDO tee "$@"; else tee "$@"; fi; }
   if [[ $OS_DISTRO == "ubuntu" ]]; then
-    echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] \
-https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" |
-      $SUDO tee /etc/apt/sources.list.d/docker.list >/dev/null
+    _tee_sudo /etc/apt/sources.list.d/docker.sources >/dev/null <<EOF
+Types: deb
+URIs: https://download.docker.com/linux/ubuntu
+Suites: $(lsb_release -cs 2>/dev/null || true)
+Components: stable
+Signed-By: /etc/apt/keyrings/docker.asc
+Architectures: $(dpkg --print-architecture)
+EOF
   else
-    echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] \
-https://download.docker.com/linux/debian $(lsb_release -cs) stable" |
-      $SUDO tee /etc/apt/sources.list.d/docker.list >/dev/null
+    local codename
+    codename=$( ( . /etc/os-release 2>/dev/null && echo "${VERSION_CODENAME:-bookworm}" ) || echo "bookworm" )
+    _tee_sudo /etc/apt/sources.list.d/docker.sources >/dev/null <<EOF
+Types: deb
+URIs: https://download.docker.com/linux/debian
+Suites: ${codename}
+Components: stable
+Signed-By: /etc/apt/keyrings/docker.asc
+Architectures: $(dpkg --print-architecture)
+EOF
   fi
+  unset -f _tee_sudo
 
   # Install Docker
   apt_update

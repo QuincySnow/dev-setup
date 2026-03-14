@@ -41,8 +41,18 @@ install_fish() {
 
   case "$PACKAGE_MANAGER" in
   apt)
-    # Add Fish repository for newer version
-    $SUDO apt-add-repository ppa:fish-shell/release-3 -y 2>/dev/null || true
+    # Ensure universe is enabled on Ubuntu (fish is in universe; minimal images may have it commented out)
+    if [[ -f /etc/os-release ]] && source /etc/os-release 2>/dev/null && [[ "${ID:-}" == "ubuntu" ]]; then
+      if command -v add-apt-repository >/dev/null 2>&1; then
+        $SUDO add-apt-repository -y universe >/dev/null 2>&1 || true
+      else
+        [[ -f /etc/apt/sources.list ]] && $SUDO sed -i '/^#.*\buniverse\b/s/^# *//' /etc/apt/sources.list
+      fi
+    fi
+    # Add Fish PPA only when add-apt-repository exists (e.g. skip in minimal Docker to avoid breaking apt update)
+    if command -v add-apt-repository >/dev/null 2>&1; then
+      $SUDO apt-add-repository ppa:fish-shell/release-3 -y 2>/dev/null || true
+    fi
     apt_update
     apt_install fish
     ;;
@@ -137,14 +147,13 @@ install_fisher() {
 
   log_step "Installing Fisher..."
 
-  # Install fisher
-  curl -sL https://raw.githubusercontent.com/jorgebucaran/fisher/main/functions/fisher.fish | fish
+  # 与本站博客《Fish Shell 终极配置指南》一致：在 fish 内 source 并安装 fisher
+  fish -c 'curl -sL https://raw.githubusercontent.com/jorgebucaran/fisher/main/functions/fisher.fish | source; fisher install jorgebucaran/fisher' 2>/dev/null || true
 
   if cmd_exists fisher; then
     log_success "Fisher installed"
   else
-    log_error "Failed to install Fisher"
-    return 1
+    log_warn "Fisher install skipped or failed (optional; fish will still work)"
   fi
 }
 
@@ -181,15 +190,17 @@ install_zsh_plugins() {
 # Install Fish plugins
 # -----------------------------------------------------------------------------
 install_fish_plugins() {
+  if ! cmd_exists fisher; then
+    log_info "Fisher not available, skipping Fish plugins"
+    return 0
+  fi
+  # 与本站博客一致：核心插件顺序 fzf.fish → z，其余可选
   log_step "Installing Fish plugins via Fisher..."
-
-  # Wait for fisher to be available in fish shell
-  fish -c "fisher install jethrokuan/z"
-  fish -c "fisher install PatrickF1/fzf.fish"
-  fish -c "fisher install jorgebucaran/fisher"
-  fish -c "fisher install edc/bass"
-  fish -c "fisher install skywind3000/z.lua"
-
+  fish -c "fisher install PatrickF1/fzf.fish" 2>/dev/null || true
+  fish -c "fisher install jethrokuan/z" 2>/dev/null || true
+  fish -c "fisher install jorgebucaran/fisher" 2>/dev/null || true
+  fish -c "fisher install edc/bass" 2>/dev/null || true
+  fish -c "fisher install skywind3000/z.lua" 2>/dev/null || true
   log_success "Fish plugins installed"
 }
 

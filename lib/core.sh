@@ -204,9 +204,8 @@ backup_file() {
       log_warn "Backing up existing file: $file -> $backup"
       cp -a "$file" "$backup"
     fi
-    return 0
   fi
-  return 1
+  return 0
 }
 
 backup_dir() {
@@ -216,9 +215,8 @@ backup_dir() {
   if [[ -d $dir ]]; then
     log_warn "Backing up existing directory: $dir -> $backup"
     mv "$dir" "$backup"
-    return 0
   fi
-  return 1
+  return 0
 }
 
 # -----------------------------------------------------------------------------
@@ -228,7 +226,7 @@ ask_confirmation() {
   local prompt="${1:-Continue?}"
   local default="${2:-n}"
 
-  if [[ ${YES_MODE:-0} == "1" ]]; then
+  if [[ "${YES_MODE:-0}" == "1" || "${YES_MODE:-}" == "true" ]]; then
     return 0
   fi
 

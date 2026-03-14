@@ -50,6 +50,7 @@ install_homebrew() {
 # -----------------------------------------------------------------------------
 apt_update() {
   log_step "Updating package lists..."
+  export DEBIAN_FRONTEND=noninteractive
   $SUDO apt-get update -qq
   log_success "Package lists updated"
 }
@@ -76,14 +77,24 @@ apt_install() {
   fi
 
   log_step "Installing packages: ${to_install[*]}"
-  $SUDO apt-get install -y -qq "${to_install[@]}"
+  export DEBIAN_FRONTEND=noninteractive
+  if ! $SUDO apt-get install -y -qq "${to_install[@]}"; then
+    log_error "apt-get install failed, re-running without -qq to show full error:"
+    $SUDO apt-get install -y "${to_install[@]}" || true
+    for pkg in "${to_install[@]}"; do
+      if ! dpkg -l "$pkg" >/dev/null 2>&1; then
+        log_error "Failed to install: $pkg"
+        return 1
+      fi
+    done
+  fi
 
   # Verify installation
   for pkg in "${to_install[@]}"; do
     if dpkg -l "$pkg" >/dev/null 2>&1; then
       log_success "Installed: $pkg"
     else
-      log_error "Failed to install: $pkg"
+      log_error "Failed to install: $pkg (apt output above)"
       return 1
     fi
   done

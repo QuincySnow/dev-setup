@@ -20,7 +20,7 @@ export DOTFILES_DIR=""
 # Initialize dotfiles directory
 # -----------------------------------------------------------------------------
 init_dotfiles() {
-  DOTFILES_DIR="${SCRIPT_DIR}/../dotfiles"
+  DOTFILES_DIR="${SCRIPT_DIR}/dotfiles"
 
   if [[ ! -d $DOTFILES_DIR ]]; then
     log_error "Dotfiles directory not found: $DOTFILES_DIR"
