@@ -226,8 +226,9 @@ ask_confirmation() {
   local prompt="${1:-Continue?}"
   local default="${2:-n}"
 
+  # --yes 时采用默认值，不交互
   if [[ "${YES_MODE:-0}" == "1" || "${YES_MODE:-}" == "true" ]]; then
-    return 0
+    [[ "$default" == "y" ]] && return 0 || return 1
   fi
 
   local yn

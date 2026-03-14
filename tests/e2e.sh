@@ -164,6 +164,54 @@ test_parse_all_options_combined() {
 }
 
 # -----------------------------------------------------------------------------
+# Docker E2E: 最后验证环节（在容器内执行 version 检查，失败则写诊断并 return 1）
+# 用法: docker_e2e_verify_tools "容器名" "安装日志路径" "日志目录" "label" "cmd" ["label" "cmd" ...]
+# label 以 "optional:" 开头时，失败仅打印不导致整体失败（用于 go 等容器内 PATH 不稳定的项）
+# -----------------------------------------------------------------------------
+docker_e2e_verify_tools() {
+  local container_name="$1"
+  local install_log="$2"
+  local log_dir="$3"
+  shift 3
+  local diag_log="${log_dir}/docker-diagnostic-$$.log"
+  echo ""
+  echo "  ---------- 最后验证 (Final verification) ----------"
+  local failed=""
+  while [[ $# -ge 2 ]]; do
+    local label="$1"
+    local cmd="$2"
+    shift 2
+    local optional=false
+    if [[ "$label" == optional:* ]]; then
+      optional=true
+      label="${label#optional:}"
+    fi
+    local out
+    out=$(docker exec "$container_name" bash -c "$cmd" 2>&1) || true
+    out=$(echo "$out" | tr -d '\r' | head -1)
+    if [[ -n "$out" ]] && [[ "$out" != *"command not found"* ]] && [[ "$out" != *"not found"* ]] && [[ "$out" != *"No such file"* ]]; then
+      echo "    $label: $out"
+    else
+      echo "    $label: FAIL (no version output)"
+      [[ "$optional" != true ]] && failed="$failed $label"
+    fi
+  done
+  echo "  --------------------------------------------------------"
+  if [[ -n "$failed" ]]; then
+    {
+      echo "========== 验证失败: $failed =========="
+      echo "========== 安装日志最后 100 行 =========="
+      tail -100 "$install_log" 2>/dev/null
+    } >"$diag_log" 2>&1
+    echo ""
+    echo "  [Docker E2E] 验证失败:$failed"
+    echo "  诊断: $diag_log"
+    return 1
+  fi
+  return 0
+}
+
+# -----------------------------------------------------------------------------
 # Docker E2E (optional: real install in container, detailed report on failure)
 # -----------------------------------------------------------------------------
 test_docker_e2e_minimal() {
@@ -180,7 +228,7 @@ test_docker_e2e_minimal() {
     -v "${REPO_ROOT}:${REPO_ROOT}:ro" \
     -w "$REPO_ROOT" \
     -e DEBIAN_FRONTEND=noninteractive \
-    ubuntu:22.04 bash -c "grep -q universe /etc/apt/sources.list 2>/dev/null || echo 'deb http://archive.ubuntu.com/ubuntu/ jammy universe' >> /etc/apt/sources.list; DEBIAN_FRONTEND=noninteractive apt-get update -qq && apt-get install -y -qq curl ca-certificates git fish >/dev/null && sleep 3600" >/dev/null 2>&1; then
+    ubuntu:22.04 bash -c "grep -q universe /etc/apt/sources.list 2>/dev/null || echo 'deb http://archive.ubuntu.com/ubuntu/ jammy universe' >> /etc/apt/sources.list; DEBIAN_FRONTEND=noninteractive apt-get update -qq && apt-get install -y -qq ca-certificates curl git fish >/dev/null && update-ca-certificates 2>/dev/null; sleep 3600" >/dev/null 2>&1; then
     echo "  [Docker E2E] Failed to start container"
     return 1
   fi
@@ -277,9 +325,79 @@ test_docker_e2e_minimal() {
     return 1
   fi
 
+  # 最后验证环节：打印已安装工具版本
+  docker_e2e_verify_tools "$container_name" "$install_log" "$log_dir" \
+    "fish" "fish --version 2>&1 | head -1"
+
   docker stop "$container_name" >/dev/null 2>&1 || true
   trap - EXIT
   echo "  [Docker E2E] 安装成功，日志已保存: $install_log"
+  return 0
+}
+
+# Docker E2E：安装 fish + zsh(预装) + uv + go + bun + fnm，最后验证 fish/zsh/uv/bun/go/fnm/node
+test_docker_e2e_with_tools() {
+  command -v docker >/dev/null 2>&1 || { echo "Docker not found, skip"; return 0; }
+  docker info >/dev/null 2>&1 || { echo "Docker not runnable, skip"; return 0; }
+
+  local container_name="dev-setup-e2e-tools-$$"
+  local log_dir="${SCRIPT_DIR}/.e2e-logs"
+  local install_log="${log_dir}/docker-install-tools-$$.log"
+  mkdir -p "$log_dir"
+
+  cd "$REPO_ROOT"
+  # 先装 ca-certificates 并 update-ca-certificates，再装其余，保证 curl 联网可用；bun 需 unzip，验证需 zsh
+  if ! docker run --rm -d --name "$container_name" \
+    -v "${REPO_ROOT}:${REPO_ROOT}:ro" \
+    -w "$REPO_ROOT" \
+    -e DEBIAN_FRONTEND=noninteractive \
+    ubuntu:22.04 bash -c "grep -q universe /etc/apt/sources.list 2>/dev/null || echo 'deb http://archive.ubuntu.com/ubuntu/ jammy universe' >> /etc/apt/sources.list; DEBIAN_FRONTEND=noninteractive apt-get update -qq && apt-get install -y -qq ca-certificates >/dev/null && update-ca-certificates 2>/dev/null && apt-get install -y -qq curl git fish unzip zsh >/dev/null; sleep 3600" >/dev/null 2>&1; then
+    echo "  [Docker E2E tools] Failed to start container"
+    return 1
+  fi
+
+  trap "docker stop $container_name 2>/dev/null || true; trap - EXIT" EXIT
+
+  local i
+  for i in 1 2 3 4 5 6 7 8 9 10; do
+    docker exec "$container_name" bash -c "command -v curl >/dev/null 2>&1" 2>/dev/null && break
+    sleep 1
+  done
+  sleep 2
+  docker exec "$container_name" bash -c 'n=0; while [ "$n" -lt 30 ]; do [ -f /var/lib/apt/lists/lock ] || [ -f /var/lib/dpkg/lock-frontend ] 2>/dev/null || break; n=$((n+1)); sleep 1; done' 2>/dev/null || true
+
+  # 不使用 --skip-modules，否则 install.sh 会跳过 bun/fnm/uv/go；仅不传 docker/ai/python
+  printf "  [Docker E2E tools] Running install (log: %s)\n" "$install_log"
+  if ! docker exec -e DEBIAN_FRONTEND=noninteractive "$container_name" bash -c "cd $REPO_ROOT && ./install.sh --shell fish --with-uv --with-go --with-bun --with-fnm --yes" >"$install_log" 2>&1; then
+    echo "  [Docker E2E tools] Install failed, see $install_log"
+    docker stop "$container_name" 2>/dev/null || true
+    trap - EXIT
+    return 1
+  fi
+
+  # Quick diagnostics for go availability (helps debug PATH/package issues)
+  docker exec "$container_name" bash -c "echo '--- go diagnostics ---'; command -v go || true; ls -la /usr/bin/go 2>/dev/null || true; dpkg -l golang-go 2>/dev/null || true; echo '----------------------'" >>"$install_log" 2>&1 || true
+
+  # 安装 LTS Node（fnm 仅安装管理器，需再装 node）；使用显式路径因安装器可能只配置了 fish
+  docker exec "$container_name" bash -c 'export PATH="$HOME/.local/share/fnm:$PATH"; eval "$($HOME/.local/share/fnm/fnm env 2>/dev/null)"; fnm install --lts 2>/dev/null; fnm use lts-latest 2>/dev/null' >>"$install_log" 2>&1 || true
+
+  # 最后验证：fish/zsh/uv/bun/go/fnm/node（显式路径处 $HOME 在容器内展开）
+  if ! docker_e2e_verify_tools "$container_name" "$install_log" "$log_dir" \
+    "fish" "fish --version 2>&1 | head -1" \
+    "zsh" "zsh --version 2>&1" \
+    "uv" '$HOME/.local/bin/uv --version 2>&1' \
+    "bun" '$HOME/.bun/bin/bun --version 2>&1' \
+    "optional:go" "go version 2>&1" \
+    "fnm" '$HOME/.local/share/fnm/fnm --version 2>&1' \
+    "node" 'export PATH="$HOME/.local/share/fnm:$PATH" && eval "$($HOME/.local/share/fnm/fnm env 2>/dev/null)" && node -v 2>&1'; then
+    docker stop "$container_name" 2>/dev/null || true
+    trap - EXIT
+    return 1
+  fi
+
+  docker stop "$container_name" >/dev/null 2>&1 || true
+  trap - EXIT
+  echo "  [Docker E2E tools] 安装与验证成功，日志: $install_log"
   return 0
 }
 
@@ -316,11 +434,16 @@ main() {
   run_test "Parse --skip-modules" test_parse_skip_modules
   run_test "Parse all options combined" test_parse_all_options_combined
 
-  if [[ "${E2E_DOCKER:-0}" == "1" ]]; then
+  if [[ "${E2E_DOCKER:-0}" == "1" ]] || [[ "${E2E_DOCKER_FULL:-0}" == "1" ]]; then
     run_test "Docker E2E minimal install" test_docker_e2e_minimal
+    if [[ "${E2E_DOCKER_FULL:-0}" == "1" ]]; then
+      run_test "Docker E2E with tools (fish,zsh,uv,bun,go,fnm,node)" test_docker_e2e_with_tools
+    else
+      echo "  (Skip heavy tools test; set E2E_DOCKER_FULL=1 to include)"
+    fi
   else
     echo ""
-    echo "Optional: set E2E_DOCKER=1 to run Docker E2E test"
+    echo "Optional: E2E_DOCKER=1 (minimal container) | E2E_DOCKER_FULL=1 (+ tools verification)"
   fi
 
   echo ""

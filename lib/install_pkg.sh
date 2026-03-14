@@ -230,8 +230,8 @@ install_starship() {
 
   log_step "Installing Starship prompt..."
 
-  # Install starship
-  curl -fsSL https://starship.rs/install.sh | sh -s -- -y
+  # Install starship（联网超时避免长时间卡住）
+  curl -fsSL --connect-timeout 15 --max-time 120 https://starship.rs/install.sh | sh -s -- -y
 
   if cmd_exists starship; then
     log_success "Starship installed successfully"
@@ -260,9 +260,15 @@ install_fzf() {
     brew_install fzf
     ;;
   *)
-    # Manual installation
-    git clone --depth 1 https://github.com/junegunn/fzf.git ~/.fzf
-    ~/.fzf/install --all --no-bash --no-zsh
+    # Manual installation（联网超时 60s，失败则跳过不阻塞整体安装）
+    if command -v timeout >/dev/null 2>&1; then
+      timeout 60 git clone --depth 1 https://github.com/junegunn/fzf.git ~/.fzf 2>/dev/null || true
+    else
+      git clone --depth 1 https://github.com/junegunn/fzf.git ~/.fzf 2>/dev/null || true
+    fi
+    if [[ -d ~/.fzf ]] && [[ -f ~/.fzf/install ]]; then
+      ~/.fzf/install --all --no-bash --no-zsh 2>/dev/null || true
+    fi
     ;;
   esac
 }

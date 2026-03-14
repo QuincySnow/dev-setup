@@ -254,6 +254,74 @@ parse_args() {
 }
 
 # =============================================================================
+# Interactive module selection (when no --with-* provided)
+# =============================================================================
+any_modules_selected() {
+  [[ "$INSTALL_DOCKER" == "true" ]] && return 0
+  [[ "$INSTALL_PODMAN" == "true" ]] && return 0
+  [[ "$INSTALL_AI" == "true" ]] && return 0
+  [[ "$INSTALL_PYTHON" == "true" ]] && return 0
+  [[ "$INSTALL_SHELL_TOOLS" == "true" ]] && return 0
+  [[ "$INSTALL_UV" == "true" ]] && return 0
+  [[ "$INSTALL_BUN" == "true" ]] && return 0
+  [[ "$INSTALL_FNM" == "true" ]] && return 0
+  [[ "$INSTALL_GO" == "true" ]] && return 0
+  return 1
+}
+
+prompt_module_selection() {
+  echo ""
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  echo "  Select modules to install (space-separated numbers)"
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  echo "  [1] Container runtime: Docker"
+  echo "  [2] Container runtime: Podman"
+  echo "  [3] AI tools (Ollama)"
+  echo "  [4] Python tools (uv, pipx)"
+  echo "  [5] Shell tools (shfmt, shellcheck)"
+  echo "  [6] UV (Python package manager)"
+  echo "  [7] Bun (JavaScript runtime)"
+  echo "  [8] FNM (Node.js version manager)"
+  echo "  [9] Go (Golang)"
+  echo ""
+  echo "  Examples:"
+  echo "    - Install uv + bun + fnm: 6 7 8"
+  echo "    - Install Docker + AI: 1 3"
+  echo "    - Skip all: (press Enter)"
+  echo ""
+  echo -ne "${COLOR_CYAN}Enter your choice:${COLOR_RESET} "
+
+  local input
+  read -r input || true
+  input="$(echo "$input" | tr ',;' ' ' | xargs || true)"
+  [[ -z "$input" ]] && return 0
+
+  local c
+  for c in $input; do
+    case "$c" in
+      1)
+        INSTALL_DOCKER=true
+        INSTALL_PODMAN=false
+        CONTAINER_RUNTIME="docker"
+        ;;
+      2)
+        INSTALL_PODMAN=true
+        INSTALL_DOCKER=false
+        CONTAINER_RUNTIME="podman"
+        ;;
+      3) INSTALL_AI=true ;;
+      4) INSTALL_PYTHON=true ;;
+      5) INSTALL_SHELL_TOOLS=true ;;
+      6) INSTALL_UV=true ;;
+      7) INSTALL_BUN=true ;;
+      8) INSTALL_FNM=true ;;
+      9) INSTALL_GO=true ;;
+      *) ;;
+    esac
+  done
+}
+
+# =============================================================================
 # Print summary
 # =============================================================================
 print_summary() {
@@ -430,6 +498,14 @@ main() {
   # Export language for subshells
   export LANGUAGE
 
+  # If user didn't specify any optional modules, allow interactive selection.
+  # In --yes mode, keep non-interactive behavior (don't prompt).
+  if [[ "${SKIP_MODULES:-false}" != "true" ]] && [[ "${YES_MODE:-false}" != "true" ]]; then
+    if ! any_modules_selected; then
+      prompt_module_selection
+    fi
+  fi
+
   # Print banner
   print_banner
   print_welcome
@@ -497,13 +573,13 @@ main() {
     elif [[ "$PACKAGE_MANAGER" == "apk" ]]; then
       apk add --no-cache uv
     elif [[ "$PACKAGE_MANAGER" == "apt" ]] || [[ "$PACKAGE_MANAGER" == "dnf" ]] || [[ "$PACKAGE_MANAGER" == "yum" ]]; then
-      curl -LsSf https://astral.sh/uv/install.sh | sh
+      curl -LsSf --connect-timeout 15 --max-time 120 https://astral.sh/uv/install.sh | sh
     else
-      curl -LsSf https://astral.sh/uv/install.sh | sh
+      curl -LsSf --connect-timeout 15 --max-time 120 https://astral.sh/uv/install.sh | sh
     fi
   fi
 
-  # Install Bun
+  # Install Bun（联网超时避免长时间卡住）
   if [[ $SKIP_MODULES == "false" ]] && [[ $INSTALL_BUN == "true" ]]; then
     log_step "Installing Bun..."
     if [[ "$PACKAGE_MANAGER" == "brew" ]]; then
@@ -511,9 +587,9 @@ main() {
     elif [[ "$PACKAGE_MANAGER" == "pacman" ]]; then
       pacman -S --noconfirm bun
     elif [[ "$PACKAGE_MANAGER" == "apt" ]] || [[ "$PACKAGE_MANAGER" == "dnf" ]] || [[ "$PACKAGE_MANAGER" == "yum" ]]; then
-      curl -fsSL https://bun.sh/install | bash
+      curl -fsSL --connect-timeout 15 --max-time 120 https://bun.sh/install | bash
     else
-      curl -fsSL https://bun.sh/install | bash
+      curl -fsSL --connect-timeout 15 --max-time 120 https://bun.sh/install | bash
     fi
   fi
 
@@ -525,9 +601,35 @@ main() {
     elif [[ "$PACKAGE_MANAGER" == "pacman" ]]; then
       pacman -S --noconfirm fnm
     elif [[ "$PACKAGE_MANAGER" == "apt" ]] || [[ "$PACKAGE_MANAGER" == "dnf" ]] || [[ "$PACKAGE_MANAGER" == "yum" ]]; then
-      curl -fsSL https://fnm.vercel.app/install | bash
+      # 联网超时避免长时间卡住；vercel 不可用时回退到 GitHub release
+      local curl_opt="--connect-timeout 15 --max-time 60"
+      if ! curl -fsSL $curl_opt https://fnm.vercel.app/install | bash; then
+        log_warn "FNM installer via fnm.vercel.app failed, falling back to GitHub release..."
+        if [[ "$PACKAGE_MANAGER" == "apt" ]]; then
+          DEBIAN_FRONTEND=noninteractive apt-get update -qq
+          DEBIAN_FRONTEND=noninteractive apt-get install -y -qq unzip ca-certificates >/dev/null 2>&1
+          update-ca-certificates 2>/dev/null || true
+        fi
+        local fnm_dir="${HOME}/.local/share/fnm"
+        mkdir -p "$fnm_dir"
+        local tmp_zip="/tmp/fnm-linux.zip"
+        if curl -fsSL $curl_opt "https://github.com/Schniz/fnm/releases/latest/download/fnm-linux.zip" -o "$tmp_zip" && [[ -f "$tmp_zip" ]]; then
+          unzip -o "$tmp_zip" -d "$fnm_dir" >/dev/null 2>&1
+          chmod +x "${fnm_dir}/fnm" 2>/dev/null || true
+        fi
+      fi
     else
-      curl -fsSL https://fnm.vercel.app/install | bash
+      local curl_opt="--connect-timeout 15 --max-time 60"
+      if ! curl -fsSL $curl_opt https://fnm.vercel.app/install | bash; then
+        log_warn "FNM installer via fnm.vercel.app failed, falling back to GitHub release..."
+        local fnm_dir="${HOME}/.local/share/fnm"
+        mkdir -p "$fnm_dir"
+        local tmp_zip="/tmp/fnm-linux.zip"
+        if curl -fsSL $curl_opt "https://github.com/Schniz/fnm/releases/latest/download/fnm-linux.zip" -o "$tmp_zip" && [[ -f "$tmp_zip" ]] && command -v unzip >/dev/null 2>&1; then
+          unzip -o "$tmp_zip" -d "$fnm_dir" >/dev/null 2>&1
+          chmod +x "${fnm_dir}/fnm" 2>/dev/null || true
+        fi
+      fi
     fi
   fi
 
@@ -541,7 +643,9 @@ main() {
     elif [[ "$PACKAGE_MANAGER" == "pacman" ]]; then
       pacman -S --noconfirm go
     elif [[ "$PACKAGE_MANAGER" == "apt" ]]; then
-      apt-get install -y golang-go
+      # Ensure package index is available in minimal images
+      DEBIAN_FRONTEND=noninteractive apt-get update -qq
+      DEBIAN_FRONTEND=noninteractive apt-get install -y golang-go
     elif [[ "$PACKAGE_MANAGER" == "dnf" ]] || [[ "$PACKAGE_MANAGER" == "yum" ]]; then
       dnf install -y golang
     else
